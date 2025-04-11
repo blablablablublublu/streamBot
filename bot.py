@@ -17,7 +17,7 @@ TWITCH_STREAMERS = ["top_gamer_qq", "dmqman"]  # Список стримерів
 # Статуси (словник для кожного стрімера)
 was_live_youtube = False
 was_live_tiktok = False
-was_live_twitch = {streamer: False for streamer in TWITCH_STREAMERS}  # Ініціалізація статусів для кожного стрімера
+was_live_twitch = {streamer: False for streamer in TWITCH_STREAMERS}
 
 def check_youtube():
     try:
@@ -95,7 +95,7 @@ while True:
             if twitch_link and not was_live_twitch[streamer]:
                 send_message(f"🔴 Twitch стрім почався!\n🎥 {twitch_title}\n👉 {twitch_link}")
                 was_live_twitch[streamer] = True
-            time.sleep(2)  # Невелика затримка між перевірками стримерів
+            time.sleep(2)
 
     except Exception as e:
         print("Помилка:", e)
