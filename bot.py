@@ -1,25 +1,28 @@
 import requests
 import time
-import telegram
+import asyncio
+from telegram import Bot
+from telegram.ext import Application
 
 # 🔑 Дані
 API_KEY = 'AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM'
 CHANNEL_ID = 'UCcBeq64BydUvdA-kZsITNlg'
 BOT_TOKEN = '8041256909:AAGjruzEE61q_H4R5zAwpTf53Peit37lqEg'
 CHAT_ID = '@testbotika12'
-bot = telegram.Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 
 TIKTOK_USERNAME = 'top_gamer_qq'
 TWITCH_CLIENT_ID = "твій_client_id"
 TWITCH_ACCESS_TOKEN = "твій_access_token"
-TWITCH_STREAMERS = ["top_gamer_qq", "dmqman"]  # Список стримерів
+TWITCH_STREAMERS = ["top_gamer_qq", "dmqman"]
 
-# Статуси (словник для кожного стрімера)
+# Статуси
 was_live_youtube = False
 was_live_tiktok = False
 was_live_twitch = {streamer: False for streamer in TWITCH_STREAMERS}
 
-def check_youtube():
+async def check_youtube():
+    global was_live_youtube
     try:
         url = f'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={CHANNEL_ID}&type=video&eventType=live&key={API_KEY}'
         response = requests.get(url).json()
@@ -37,7 +40,8 @@ def check_youtube():
         print("YouTube помилка:", e)
     return None, None
 
-def check_tiktok():
+async def check_tiktok():
+    global was_live_tiktok
     try:
         headers = {
             "User-Agent": "Mozilla/5.0"
@@ -50,7 +54,8 @@ def check_tiktok():
         print("TikTok помилка:", e)
     return None
 
-def check_twitch(streamer):
+async def check_twitch(streamer):
+    global was_live_twitch
     try:
         url = f"https://api.twitch.tv/helix/streams?user_login={streamer}"
         headers = {
@@ -69,35 +74,39 @@ def check_twitch(streamer):
         print(f"Twitch помилка для {streamer}:", e)
     return None, None
 
-def send_message(text):
-    bot.send_message(chat_id=CHAT_ID, text=text)
+async def send_message(text):
+    await bot.send_message(chat_id=CHAT_ID, text=text)
 
-# 🔁 Основний цикл
-while True:
-    try:
-        # YouTube
-        link, title = check_youtube()
-        if link and not was_live_youtube:
-            send_message(f"🔴 YouTube стрім почався!\n🎥 {title}\n👉 {link}")
-            was_live_youtube = True
-        time.sleep(5)
+async def main():
+    global was_live_youtube, was_live_tiktok, was_live_twitch
+    while True:
+        try:
+            # YouTube
+            link, title = await check_youtube()
+            if link and not was_live_youtube:
+                await send_message(f"🔴 YouTube стрім почався!\n🎥 {title}\n👉 {link}")
+                was_live_youtube = True
+            await asyncio.sleep(5)
 
-        # TikTok
-        tiktok_live = check_tiktok()
-        if tiktok_live and not was_live_tiktok:
-            send_message(f"🎥 TikTok стрім почався!\n👉 {tiktok_live}")
-            was_live_tiktok = True
-        time.sleep(5)
+            # TikTok
+            tiktok_live = await check_tiktok()
+            if tiktok_live and not was_live_tiktok:
+                await send_message(f"🎥 TikTok стрім почався!\n👉 {tiktok_live}")
+                was_live_tiktok = True
+            await asyncio.sleep(5)
 
-        # Twitch (перевірка всіх стримерів)
-        for streamer in TWITCH_STREAMERS:
-            twitch_link, twitch_title = check_twitch(streamer)
-            if twitch_link and not was_live_twitch[streamer]:
-                send_message(f"🔴 Twitch стрім почався!\n🎥 {twitch_title}\n👉 {twitch_link}")
-                was_live_twitch[streamer] = True
-            time.sleep(2)
+            # Twitch
+            for streamer in TWITCH_STREAMERS:
+                twitch_link, twitch_title = await check_twitch(streamer)
+                if twitch_link and not was_live_twitch[streamer]:
+                    await send_message(f"🔴 Twitch стрім почався!\n🎥 {twitch_title}\n👉 {twitch_link}")
+                    was_live_twitch[streamer] = True
+                await asyncio.sleep(2)
 
-    except Exception as e:
-        print("Помилка:", e)
+        except Exception as e:
+            print("Помилка:", e)
 
-    time.sleep(50)
+        await asyncio.sleep(50)
+
+if __name__ == "__main__":
+    asyncio.run(main())
