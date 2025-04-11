@@ -12,12 +12,12 @@ bot = telegram.Bot(token=BOT_TOKEN)
 TIKTOK_USERNAME = 'top_gamer_qq'
 TWITCH_CLIENT_ID = "твій_client_id"
 TWITCH_ACCESS_TOKEN = "твій_access_token"
-TWITCH_STREAMER = "top_gamer_qq"
+TWITCH_STREAMERS = ["top_gamer_qq", "dmqman"]  # Список стримерів
 
-# Статуси
+# Статуси (словник для кожного стрімера)
 was_live_youtube = False
 was_live_tiktok = False
-was_live_twitch = False
+was_live_twitch = {streamer: False for streamer in TWITCH_STREAMERS}  # Ініціалізація статусів для кожного стрімера
 
 def check_youtube():
     try:
@@ -50,9 +50,9 @@ def check_tiktok():
         print("TikTok помилка:", e)
     return None
 
-def check_twitch():
+def check_twitch(streamer):
     try:
-        url = f"https://api.twitch.tv/helix/streams?user_login={TWITCH_STREAMER}"
+        url = f"https://api.twitch.tv/helix/streams?user_login={streamer}"
         headers = {
             "Authorization": f"Bearer {TWITCH_ACCESS_TOKEN}",
             "Client-Id": TWITCH_CLIENT_ID
@@ -63,10 +63,10 @@ def check_twitch():
         if data.get("data"):
             stream = data["data"][0]
             title = stream["title"]
-            stream_url = f"https://www.twitch.tv/{TWITCH_STREAMER}"
+            stream_url = f"https://www.twitch.tv/{streamer}"
             return stream_url, title
     except Exception as e:
-        print("Twitch помилка:", e)
+        print(f"Twitch помилка для {streamer}:", e)
     return None, None
 
 def send_message(text):
@@ -89,11 +89,13 @@ while True:
             was_live_tiktok = True
         time.sleep(5)
 
-        # Twitch
-        twitch_link, twitch_title = check_twitch()
-        if twitch_link and not was_live_twitch:
-            send_message(f"🔴 Twitch стрім почався!\n🎥 {twitch_title}\n👉 {twitch_link}")
-            was_live_twitch = True
+        # Twitch (перевірка всіх стримерів)
+        for streamer in TWITCH_STREAMERS:
+            twitch_link, twitch_title = check_twitch(streamer)
+            if twitch_link and not was_live_twitch[streamer]:
+                send_message(f"🔴 Twitch стрім почався!\n🎥 {twitch_title}\n👉 {twitch_link}")
+                was_live_twitch[streamer] = True
+            time.sleep(2)  # Невелика затримка між перевірками стримерів
 
     except Exception as e:
         print("Помилка:", e)
