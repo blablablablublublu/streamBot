@@ -1,2 +1,2 @@
 #!/bin/bash
-python3 bot.py
+python yt_stream_notifier.py
