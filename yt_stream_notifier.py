@@ -1,28 +1,40 @@
-
 import requests
 import time
+import telegram
 
 # 🔑 Дані
 API_KEY = 'AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM'
-CHANNEL_ID = 'UCcBeq64BydUvdA-kZsITNlg'  # ID YouTube-каналу
+CHANNEL_ID = 'UCcBeq64BydUvdA-kZsITNlg'
 BOT_TOKEN = '8041256909:AAGjruzEE61q_H4R5zAwpTf53Peit37lqEg'
-CHAT_ID = '@testbotika12'  # або ID (наприклад -1001234567890)
+CHAT_ID = '@testbotika12'
+bot = telegram.Bot(token=BOT_TOKEN)
 
 TIKTOK_USERNAME = 'top_gamer_qq'
+TWITCH_CLIENT_ID = "твій_client_id"
+TWITCH_ACCESS_TOKEN = "твій_access_token"
+TWITCH_STREAMER = "top_gamer_qq"
 
 # Статуси
 was_live_youtube = False
 was_live_tiktok = False
+was_live_twitch = False
 
 def check_youtube():
-    url = f'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={CHANNEL_ID}&type=video&eventType=live&key={API_KEY}'
-    response = requests.get(url).json()
-    
-    items = response.get('items', [])
-    if items:
-        video_id = items[0]['id']['videoId']
-        title = items[0]['snippet']['title']
-        return f'https://www.youtube.com/watch?v={video_id}', title
+    try:
+        url = f'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={CHANNEL_ID}&type=video&eventType=live&key={API_KEY}'
+        response = requests.get(url).json()
+        
+        if 'error' in response:
+            print("YouTube API помилка:", response['error']['message'])
+            return None, None
+
+        items = response.get('items', [])
+        if items:
+            video_id = items[0]['id']['videoId']
+            title = items[0]['snippet']['title']
+            return f'https://www.youtube.com/watch?v={video_id}', title
+    except Exception as e:
+        print("YouTube помилка:", e)
     return None, None
 
 def check_tiktok():
@@ -38,10 +50,27 @@ def check_tiktok():
         print("TikTok помилка:", e)
     return None
 
+def check_twitch():
+    try:
+        url = f"https://api.twitch.tv/helix/streams?user_login={TWITCH_STREAMER}"
+        headers = {
+            "Authorization": f"Bearer {TWITCH_ACCESS_TOKEN}",
+            "Client-Id": TWITCH_CLIENT_ID
+        }
+        response = requests.get(url, headers=headers)
+        data = response.json()
+
+        if data.get("data"):
+            stream = data["data"][0]
+            title = stream["title"]
+            stream_url = f"https://www.twitch.tv/{TWITCH_STREAMER}"
+            return stream_url, title
+    except Exception as e:
+        print("Twitch помилка:", e)
+    return None, None
+
 def send_message(text):
-    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
-    data = {'chat_id': CHAT_ID, 'text': text}
-    requests.post(url, data=data)
+    bot.send_message(chat_id=CHAT_ID, text=text)
 
 # 🔁 Основний цикл
 while True:
@@ -51,18 +80,22 @@ while True:
         if link and not was_live_youtube:
             send_message(f"🔴 YouTube стрім почався!\n🎥 {title}\n👉 {link}")
             was_live_youtube = True
-        elif not link:
-            was_live_youtube = False
+        time.sleep(5)
 
         # TikTok
         tiktok_live = check_tiktok()
         if tiktok_live and not was_live_tiktok:
             send_message(f"🎥 TikTok стрім почався!\n👉 {tiktok_live}")
             was_live_tiktok = True
-        elif not tiktok_live:
-            was_live_tiktok = False
+        time.sleep(5)
+
+        # Twitch
+        twitch_link, twitch_title = check_twitch()
+        if twitch_link and not was_live_twitch:
+            send_message(f"🔴 Twitch стрім почався!\n🎥 {twitch_title}\n👉 {twitch_link}")
+            was_live_twitch = True
 
     except Exception as e:
         print("Помилка:", e)
 
-    time.sleep(60)
+    time.sleep(50)
