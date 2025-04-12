@@ -1,6 +1,6 @@
 modules = ["python-3.12", "bash"]
 
-run = "python3 main.py"
+run = "gunicorn -b 0.0.0.0:8080 main:app"
 
 [nix]
 channel = "stable-24_05"
