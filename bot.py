@@ -47,24 +47,25 @@ was_live_youtube, was_live_tiktok, was_live_twitch = load_status()
 async def check_youtube():
     global was_live_youtube
     try:
-        url = f'https://www.googleapis.com/youtube/v3/search?part=snippet&channelId={CHANNEL_ID}&type=video&eventType=live&key={API_KEY}'
-        response = requests.get(url).json()
-
-        if 'error' in response:
-            logging.error(f"YouTube API помилка: {response['error']['message']}")
-            return None, None
-
-        items = response.get('items', [])
-        if items:
-            video_id = items[0]['id']['videoId']
-            title = items[0]['snippet']['title']
-            logging.info(f"YouTube: Знайдено стрім - {title}, {video_id}")
-            return f'https://www.youtube.com/watch?v={video_id}', title
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        url = f'https://www.youtube.com/channel/{CHANNEL_ID}/live'
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200 and '"isLive":true' in response.text:
+            # Витягуємо заголовок (title) із HTML
+            title_start = response.text.find('<title>') + 7
+            title_end = response.text.find('</title>')
+            title = response.text[title_start:title_end].replace(' - YouTube', '')
+            logging.info(f"YouTube: Стрім активний - {title}")
+            return f'https://www.youtube.com/channel/{CHANNEL_ID}/live', title
         else:
             logging.info("YouTube: Стріму немає")
+            return None, None
     except Exception as e:
-        logging.error(f"YouTube помилка: {e}")
-    return None, None
+        logging.error(f"YouTube помилка (web scraping): {e}")
+        return None, None
 
 async def check_tiktok():
     global was_live_tiktok
