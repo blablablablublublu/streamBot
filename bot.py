@@ -6,29 +6,38 @@ import threading
 import time
 from datetime import datetime
 import telebot
+from flask import Flask, request, abort
 
 # Налаштування логування
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
 # Конфігураційні змінні
-# Використовується новий токен, отриманий від BotFather
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8041256909:AAGP38US7WMqPKP1FXCM59M_Abx0Q6nBtBk")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  # Якщо є API-ключ, інакше залиште пустим
-CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"           # YouTube Channel ID
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM")
+CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"  # YouTube Channel ID
 TIKTOK_USERNAME = "top_gamer_qq"
-TELEGRAM_CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@testbotika12")  # Канал для повідомлень
-TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
+TELEGRAM_CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@testbotika12")
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")  # Якщо є, інакше залишається None
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 TWITCH_LOGIN = "dmqman"
 
-# Ініціалізуємо бота
+# WEBHOOK URL (публічний URL вашого додатку, наприклад, Render)
+WEBHOOK_URL_BASE = os.getenv("WEBHOOK_URL", "https://streambot-yzkw.onrender.com")
+WEBHOOK_URL_PATH = f"/{BOT_TOKEN}"
+
+if not WEBHOOK_URL_BASE:
+    logger.error("WEBHOOK_URL не задано. Будь ласка, задайте публічний URL вашого додатку.")
+    exit(1)
+
+# Ініціалізуємо Flask-додаток та бота
+app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Словник для відстеження активних стрімів (щоб уникнути спаму)
+# Словник для відстеження активних стрімів (щоб уникнути дублювання повідомлень)
 active_streams = {
     "YouTube": False,
     "TikTok": False,
@@ -37,16 +46,16 @@ active_streams = {
 
 def in_grey_zone() -> bool:
     """
-    Повертає True, якщо поточний час знаходиться в "сірій зоні" (з 2:00 до 12:00),
-    коли перевірки відключені для економії запитів.
+    Повертає True, якщо теперішній час знаходиться в "сірій зоні" (з 2:00 до 12:00)
+    для економії запитів.
     """
     now = datetime.now()
     return 2 <= now.hour < 12
 
 def check_youtube_live():
     """
-    Перевіряє, чи веде YouTube канал стрім.
-    Якщо заданий API-ключ, використовує YouTube Data API, інакше – резервний метод через HTML.
+    Перевіряє наявність стріму на YouTube.
+    Якщо API-ключ заданий, використовує YouTube Data API; інакше – перевірка через HTML.
     """
     try:
         if YOUTUBE_API_KEY:
@@ -70,7 +79,7 @@ def check_youtube_live():
 
 def check_tiktok_live():
     """
-    Перевіряє, чи веде TikTok користувач стрім, шукаючи паттерн "liveStatus" у HTML-розмітці.
+    Перевіряє наявність стріму в TikTok, шукаючи у HTML паттерн "liveStatus".
     """
     try:
         url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
@@ -86,7 +95,7 @@ def check_tiktok_live():
 
 def check_twitch_live():
     """
-    Перевіряє наявність стріму на Twitch через API (при наявності client_id і client_secret).
+    Перевіряє наявність стріму на Twitch через API (за наявності client_id та client_secret).
     """
     try:
         if TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET:
@@ -123,9 +132,8 @@ def check_twitch_live():
 def check_streams_and_notify():
     """
     Фонова функція, яка кожні 5 хвилин перевіряє стріми на всіх платформах.
-    Якщо знайдено новий стрім (тобто, повідомлення ще не надсилались),
-    надсилає повідомлення в Telegram-канал та встановлює відповідну позначку.
-    Якщо стрім завершився – позначку скидає.
+    Якщо виявлено новий стрім (і повідомлення ще не надсилалося), надсилає повідомлення
+    в Telegram-канал. Якщо стрім завершився – прапорець скидається.
     Перевірки не виконуються у "сірій зоні" (з 2:00 до 12:00).
     """
     while True:
@@ -145,7 +153,7 @@ def check_streams_and_notify():
                 message = f"🔴 {platform} стрім почався: {link}"
                 try:
                     bot.send_message(TELEGRAM_CHANNEL, message)
-                    logger.info("Надіслано повідомлення для %s", platform)
+                    logger.info("Уведомлення відправлено для %s", platform)
                 except Exception as err:
                     logger.error("Помилка надсилання для %s: %s", platform, err)
             elif not is_live and active_streams[platform]:
@@ -154,7 +162,7 @@ def check_streams_and_notify():
 
 def start_background_task():
     """
-    Запускає фонову задачу перевірки стрімів в окремому потоці.
+    Запускає фонову задачу перевірки стрімів у окремому потоці.
     """
     thread = threading.Thread(target=check_streams_and_notify)
     thread.daemon = True
@@ -162,7 +170,7 @@ def start_background_task():
 
 # ================================
 # ОБРОБНИКИ ПОВІДОМЛЕНЬ (ДЕКОРАТОРИ)
-# Розташовуємо їх слідом за всіма іншими визначеннями функцій, безпосередньо перед bot.polling()
+# Всі обробники мають бути розміщені в кінці файлу, перед запуском Flask-сервера.
 # ================================
 
 @bot.message_handler(commands=['start'])
@@ -188,14 +196,46 @@ def handle_check_streams(message):
 
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
-    # Приклад обробки текстових повідомлень
     bot.reply_to(message, f"Привіт, ти написав: {message.text}")
 
 # ================================
-# Запуск фонового монітора та polling
+# WEBHOOK ROUTING для Flask
 # ================================
-start_background_task()
-bot.polling(none_stop=True)
+
+@app.route(WEBHOOK_URL_PATH, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        try:
+            update = telebot.types.Update.de_json(json_string)
+            bot.process_new_updates([update])
+        except Exception as e:
+            logger.error("Помилка обробки оновлення: %s", e)
+        return ""
+    else:
+        abort(403)
+
+@app.route("/")
+def index():
+    return "Бот працює через webhook!"
+
+# ================================
+# Запуск фонового монітора та налаштування webhook
+# ================================
+if __name__ == "__main__":
+    start_background_task()
+
+    # Видаляємо старий webhook і встановлюємо новий
+    bot.remove_webhook()
+    full_webhook_url = f"{WEBHOOK_URL_BASE}{WEBHOOK_URL_PATH}"
+    if bot.set_webhook(url=full_webhook_url):
+        logger.info("Webhook встановлено: %s", full_webhook_url)
+    else:
+        logger.error("Не вдалося встановити webhook на: %s", full_webhook_url)
+
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
 
 
 
