@@ -2,7 +2,7 @@ import os
 import re
 import requests
 import logging
-import asyncio
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -14,34 +14,36 @@ logger = logging.getLogger(__name__)
 
 # Конфігураційні змінні
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")   # Замість None введіть реальний API-ключ
-CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"            # YouTube Channel ID
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  # Вкажіть, якщо є API-ключ
+CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"           # YouTube Channel ID
 
 TIKTOK_USERNAME = "top_gamer_qq"
-TELEGRAM_CHANNEL = "@testbotika12"                 # Telegram канал для повідомлень
+TELEGRAM_CHANNEL = "@testbotika12"                # Telegram канал для повідомлень
 
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 TWITCH_LOGIN = "dmqman"
 
-# Зберігання активних стрімів
+# Словник для відстеження стану стрімів по платформах
 active_streams = {"YouTube": False, "TikTok": False, "Twitch": False}
 
-def is_in_grey_zone():
+
+def in_grey_zone() -> bool:
     """
-    Перевірка, чи перебуваємо в "сірій зоні".
-    Сірі зони: з 2:00 до 12:00.
+    Повертає True, якщо поточний час у "сірій зоні" перевірок (з 2:00 до 12:00).
     """
-    current_hour = asyncio.get_event_loop().time() // 3600 % 24  # Отримуємо поточний час
-    return 2 <= current_hour <= 12
+    now = datetime.now()
+    return 2 <= now.hour < 12
+
 
 # Функції перевірки платформ
+
 async def check_youtube_live():
     """
-    Перевірка YouTube API або запасний метод (HTML).
+    Перевіряє YouTube API або, при відсутності API-ключа, спираючись на HTML-сторінку.
     """
     try:
-        if YOUTUBE_API_KEY:  # Використовує API, якщо ключ встановлено
+        if YOUTUBE_API_KEY:
             url = (
                 "https://www.googleapis.com/youtube/v3/search"
                 f"?part=snippet&channelId={CHANNEL_ID}&eventType=live&type=video&key={YOUTUBE_API_KEY}"
@@ -53,7 +55,7 @@ async def check_youtube_live():
                 video_url = f"https://www.youtube.com/watch?v={video_id}"
                 return True, video_url
         else:
-            # Резервний варіант: пошук live через HTML-сторінку
+            # Резервний варіант – HTML перевірка
             url = f"https://www.youtube.com/channel/{CHANNEL_ID}/live"
             resp = requests.get(url, timeout=5)
             if "isLiveBroadcast" in resp.text:
@@ -63,9 +65,10 @@ async def check_youtube_live():
         logger.error("Помилка при перевірці YouTube: %s", e)
         return False, None
 
+
 async def check_tiktok_live():
     """
-    Використовує регулярний вираз для пошуку live у HTML.
+    Перевіряє наявність стріму в TikTok через пошук регулярним виразом паттерна "liveStatus".
     """
     try:
         url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
@@ -79,13 +82,13 @@ async def check_tiktok_live():
         logger.error("Помилка при перевірці TikTok: %s", e)
         return False, None
 
+
 async def check_twitch_live():
     """
-    Перевіряє Twitch API або інший спосіб (HTML-сторінка).
+    Перевіряє Twitch через API або альтернативний метод, якщо API доступний.
     """
     try:
         if TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET:
-            # Отримуємо access token
             token_url = "https://id.twitch.tv/oauth2/token"
             params = {
                 "client_id": TWITCH_CLIENT_ID,
@@ -102,12 +105,10 @@ async def check_twitch_live():
                 "Client-ID": TWITCH_CLIENT_ID,
                 "Authorization": f"Bearer {access_token}"
             }
-
-            # Отримуємо статус стріму
             stream_resp = requests.get(
-                "https://api.twitch.tv/helix/streams", 
-                headers=headers, 
-                params={"user_login": TWITCH_LOGIN}, 
+                "https://api.twitch.tv/helix/streams",
+                headers=headers,
+                params={"user_login": TWITCH_LOGIN},
                 timeout=5
             )
             stream_data = stream_resp.json()
@@ -119,39 +120,44 @@ async def check_twitch_live():
         logger.error("Помилка при перевірці Twitch: %s", e)
         return False, None
 
-async def check_streams_and_notify(application):
-    """
-    Функція для періодичної перевірки стрімів та відправки повідомлень.
-    """
-    while True:
-        if is_in_grey_zone():
-            logger.info("Перевірки припинено через сірі зони.")
-            await asyncio.sleep(300)
-            continue
 
-        for platform, check_function in [("YouTube", check_youtube_live),
-                                         ("TikTok", check_tiktok_live),
-                                         ("Twitch", check_twitch_live)]:
-            is_live, link = await check_function()
-            if is_live and not active_streams[platform]:  # Якщо стрім активний і ще не повідомляли
-                active_streams[platform] = True
-                message = f"🔴 {platform}: {link}"
-                await application.bot.send_message(chat_id=TELEGRAM_CHANNEL, text=message)
-            elif not is_live and active_streams[platform]:  # Якщо стрім завершився
-                active_streams[platform] = False
+# Фонова функція, яка запускається кожні 5 хвилин за допомогою job_queue
+async def check_streams_and_notify(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Фонова задача, яка перевіряє зазначені платформи та надсилає повідомлення
+    в Telegram-канал лише на початку стріму. Якщо стрім вже активний, нове повідомлення не
+    надсилається до його завершення. Також, якщо поточний час належить "сірій зоні",
+    перевірки не виконуються.
+    """
+    if in_grey_zone():
+        logger.info("Перевірки відключено в сірій зоні.")
+        return
 
-        await asyncio.sleep(300)  # Інтервал перевірки – 5 хвилин
+    # Перевірка кожної платформи
+    for platform, check_function in [
+        ("YouTube", check_youtube_live),
+        ("TikTok", check_tiktok_live),
+        ("Twitch", check_twitch_live)
+    ]:
+        is_live, link = await check_function()
+        # Якщо стрім активний, але ми ще не повідомляли – надсилаємо повідомлення
+        if is_live and not active_streams[platform]:
+            active_streams[platform] = True
+            message = f"🔴 {platform} стрім почався: {link}"
+            await context.bot.send_message(chat_id=TELEGRAM_CHANNEL, text=message)
+            logger.info("Надіслано повідомлення про %s", platform)
+        # Якщо стрім не активний, скидаємо стан
+        elif not is_live and active_streams[platform]:
+            active_streams[platform] = False
+
+
+# Обробники команд для ручної перевірки
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Обробник команди /start
-    """
     await update.message.reply_text("Бот працює! Автоматичний моніторинг стрімів увімкнено.")
 
+
 async def checkstreams_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Команда /checkstreams: ручна перевірка.
-    """
     results = {
         "YouTube": await check_youtube_live(),
         "TikTok": await check_tiktok_live(),
@@ -167,21 +173,23 @@ async def checkstreams_command(update: Update, context: ContextTypes.DEFAULT_TYP
         message = "Наразі стрімів немає."
     await update.message.reply_text(message)
 
+
 def main():
-    """
-    Головна функція для запуску бота.
-    """
     application = Application.builder().token(BOT_TOKEN).build()
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("checkstreams", checkstreams_command))
 
-    # Запускаємо моніторинг у фоні
-    asyncio.create_task(check_streams_and_notify(application))
+    # Використовуємо job_queue для періодичного запуску перевірок кожні 5 хвилин
+    application.job_queue.run_repeating(check_streams_and_notify, interval=300, first=0)
 
+    logger.info("Бот запущено.")
     application.run_polling()
+
 
 if __name__ == "__main__":
     main()
+
 
 
 
