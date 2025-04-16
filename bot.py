@@ -2,52 +2,56 @@ import os
 import re
 import requests
 import logging
+import threading
+import time
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+import telebot
 
 # Налаштування логування
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
 # Конфігураційні змінні
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  # Вкажіть, якщо є API-ключ
+# Використовується новий токен, отриманий від BotFather
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8041256909:AAGP38US7WMqPKP1FXCM59M_Abx0Q6nBtBk")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  # Якщо є API-ключ, інакше залиште пустим
 CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"           # YouTube Channel ID
-
 TIKTOK_USERNAME = "top_gamer_qq"
-TELEGRAM_CHANNEL = "@testbotika12"                # Telegram канал для повідомлень
-
+TELEGRAM_CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@testbotika12")  # Канал для повідомлень
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 TWITCH_LOGIN = "dmqman"
 
-# Словник для відстеження стану стрімів по платформах
-active_streams = {"YouTube": False, "TikTok": False, "Twitch": False}
+# Ініціалізуємо бота
+bot = telebot.TeleBot(BOT_TOKEN)
 
+# Словник для відстеження активних стрімів (щоб уникнути спаму)
+active_streams = {
+    "YouTube": False,
+    "TikTok": False,
+    "Twitch": False
+}
 
 def in_grey_zone() -> bool:
     """
-    Повертає True, якщо поточний час у "сірій зоні" перевірок (з 2:00 до 12:00).
+    Повертає True, якщо поточний час знаходиться в "сірій зоні" (з 2:00 до 12:00),
+    коли перевірки відключені для економії запитів.
     """
     now = datetime.now()
     return 2 <= now.hour < 12
 
-
-# Функції перевірки платформ
-
-async def check_youtube_live():
+def check_youtube_live():
     """
-    Перевіряє YouTube API або, при відсутності API-ключа, спираючись на HTML-сторінку.
+    Перевіряє, чи веде YouTube канал стрім.
+    Якщо заданий API-ключ, використовує YouTube Data API, інакше – резервний метод через HTML.
     """
     try:
         if YOUTUBE_API_KEY:
-            url = (
-                "https://www.googleapis.com/youtube/v3/search"
-                f"?part=snippet&channelId={CHANNEL_ID}&eventType=live&type=video&key={YOUTUBE_API_KEY}"
-            )
+            url = ("https://www.googleapis.com/youtube/v3/search"
+                   f"?part=snippet&channelId={CHANNEL_ID}&eventType=live&type=video&key={YOUTUBE_API_KEY}")
             resp = requests.get(url, timeout=5)
             data = resp.json()
             if data.get("items"):
@@ -55,20 +59,18 @@ async def check_youtube_live():
                 video_url = f"https://www.youtube.com/watch?v={video_id}"
                 return True, video_url
         else:
-            # Резервний варіант – HTML перевірка
             url = f"https://www.youtube.com/channel/{CHANNEL_ID}/live"
             resp = requests.get(url, timeout=5)
             if "isLiveBroadcast" in resp.text:
                 return True, url
         return False, None
     except Exception as e:
-        logger.error("Помилка при перевірці YouTube: %s", e)
+        logger.error("Помилка перевірки YouTube: %s", e)
         return False, None
 
-
-async def check_tiktok_live():
+def check_tiktok_live():
     """
-    Перевіряє наявність стріму в TikTok через пошук регулярним виразом паттерна "liveStatus".
+    Перевіряє, чи веде TikTok користувач стрім, шукаючи паттерн "liveStatus" у HTML-розмітці.
     """
     try:
         url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
@@ -79,13 +81,12 @@ async def check_tiktok_live():
             return True, url
         return False, None
     except Exception as e:
-        logger.error("Помилка при перевірці TikTok: %s", e)
+        logger.error("Помилка перевірки TikTok: %s", e)
         return False, None
 
-
-async def check_twitch_live():
+def check_twitch_live():
     """
-    Перевіряє Twitch через API або альтернативний метод, якщо API доступний.
+    Перевіряє наявність стріму на Twitch через API (при наявності client_id і client_secret).
     """
     try:
         if TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET:
@@ -100,7 +101,6 @@ async def check_twitch_live():
             access_token = token_data.get("access_token")
             if not access_token:
                 return False, None
-
             headers = {
                 "Client-ID": TWITCH_CLIENT_ID,
                 "Authorization": f"Bearer {access_token}"
@@ -117,78 +117,88 @@ async def check_twitch_live():
                 return True, live_url
         return False, None
     except Exception as e:
-        logger.error("Помилка при перевірці Twitch: %s", e)
+        logger.error("Помилка перевірки Twitch: %s", e)
         return False, None
 
-
-# Фонова функція, яка запускається кожні 5 хвилин за допомогою job_queue
-async def check_streams_and_notify(context: ContextTypes.DEFAULT_TYPE):
+def check_streams_and_notify():
     """
-    Фонова задача, яка перевіряє зазначені платформи та надсилає повідомлення
-    в Telegram-канал лише на початку стріму. Якщо стрім вже активний, нове повідомлення не
-    надсилається до його завершення. Також, якщо поточний час належить "сірій зоні",
-    перевірки не виконуються.
+    Фонова функція, яка кожні 5 хвилин перевіряє стріми на всіх платформах.
+    Якщо знайдено новий стрім (тобто, повідомлення ще не надсилались),
+    надсилає повідомлення в Telegram-канал та встановлює відповідну позначку.
+    Якщо стрім завершився – позначку скидає.
+    Перевірки не виконуються у "сірій зоні" (з 2:00 до 12:00).
     """
-    if in_grey_zone():
-        logger.info("Перевірки відключено в сірій зоні.")
-        return
+    while True:
+        if in_grey_zone():
+            logger.info("Перевірки відключені (сіра зона).")
+            time.sleep(300)
+            continue
 
-    # Перевірка кожної платформи
-    for platform, check_function in [
+        for platform, check_func in [
+            ("YouTube", check_youtube_live),
+            ("TikTok", check_tiktok_live),
+            ("Twitch", check_twitch_live)
+        ]:
+            is_live, link = check_func()
+            if is_live and not active_streams[platform]:
+                active_streams[platform] = True
+                message = f"🔴 {platform} стрім почався: {link}"
+                try:
+                    bot.send_message(TELEGRAM_CHANNEL, message)
+                    logger.info("Надіслано повідомлення для %s", platform)
+                except Exception as err:
+                    logger.error("Помилка надсилання для %s: %s", platform, err)
+            elif not is_live and active_streams[platform]:
+                active_streams[platform] = False
+        time.sleep(300)
+
+def start_background_task():
+    """
+    Запускає фонову задачу перевірки стрімів в окремому потоці.
+    """
+    thread = threading.Thread(target=check_streams_and_notify)
+    thread.daemon = True
+    thread.start()
+
+# ================================
+# ОБРОБНИКИ ПОВІДОМЛЕНЬ (ДЕКОРАТОРИ)
+# Розташовуємо їх слідом за всіма іншими визначеннями функцій, безпосередньо перед bot.polling()
+# ================================
+
+@bot.message_handler(commands=['start'])
+def handle_start(message):
+    bot.reply_to(message, "Бот працює! Автоматичний моніторинг стрімів увімкнено.")
+
+@bot.message_handler(commands=['checkstreams'])
+def handle_check_streams(message):
+    results = []
+    for platform, check in [
         ("YouTube", check_youtube_live),
         ("TikTok", check_tiktok_live),
         ("Twitch", check_twitch_live)
     ]:
-        is_live, link = await check_function()
-        # Якщо стрім активний, але ми ще не повідомляли – надсилаємо повідомлення
-        if is_live and not active_streams[platform]:
-            active_streams[platform] = True
-            message = f"🔴 {platform} стрім почався: {link}"
-            await context.bot.send_message(chat_id=TELEGRAM_CHANNEL, text=message)
-            logger.info("Надіслано повідомлення про %s", platform)
-        # Якщо стрім не активний, скидаємо стан
-        elif not is_live and active_streams[platform]:
-            active_streams[platform] = False
-
-
-# Обробники команд для ручної перевірки
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Бот працює! Автоматичний моніторинг стрімів увімкнено.")
-
-
-async def checkstreams_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    results = {
-        "YouTube": await check_youtube_live(),
-        "TikTok": await check_tiktok_live(),
-        "Twitch": await check_twitch_live()
-    }
-    message = "🔴 **Результати перевірки:**\n"
-    any_live = False
-    for platform, (is_live, link) in results.items():
+        is_live, link = check()
         if is_live:
-            any_live = True
-            message += f"{platform}: {link}\n"
-    if not any_live:
-        message = "Наразі стрімів немає."
-    await update.message.reply_text(message)
+            results.append(f"{platform}: {link}")
+    if results:
+        response = "🔴 Активні стріми:\n" + "\n".join(results)
+    else:
+        response = "Зараз стрімів немає."
+    bot.reply_to(message, response)
+
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    # Приклад обробки текстових повідомлень
+    bot.reply_to(message, f"Привіт, ти написав: {message.text}")
+
+# ================================
+# Запуск фонового монітора та polling
+# ================================
+start_background_task()
+bot.polling(none_stop=True)
 
 
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("checkstreams", checkstreams_command))
-
-    # Використовуємо job_queue для періодичного запуску перевірок кожні 5 хвилин
-    application.job_queue.run_repeating(check_streams_and_notify, interval=300, first=0)
-
-    logger.info("Бот запущено.")
-    application.run_polling()
-
-
-if __name__ == "__main__":
-    main()
 
 
 
