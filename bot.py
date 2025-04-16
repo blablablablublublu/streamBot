@@ -1,126 +1,177 @@
 import os
 import requests
-import json
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from flask import Flask, request
+import logging
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, CallbackContext
 
-# Налаштування Flask для Webhook
-app = Flask(__name__)
+# Налаштування логування
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Налаштування Telegram
+# Дані для бота та каналів
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8041256909:AAGjruzEE61q_H4R5zAwpTf53Peit37lqEg")
+YOUTUBE_API_KEY = os.getenv("AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM")  # Повинно бути встановлено
 CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"  # YouTube Channel ID
+
 TIKTOK_USERNAME = "top_gamer_qq"
-TELEGRAM_CHANNEL = "@testbotika12"  # ID твого Telegram-каналу
 
-# Ініціалізація Telegram Application
-telegram_app = Application.builder().token(BOT_TOKEN).build()
+TELEGRAM_CHANNEL = "@testbotika12"  # Telegram канал для розсилки повідомлень
 
-# Ініціалізуємо Application
-telegram_app.initialize()
+# Дані для Twitch (отримайте з вашого акаунту Twitch developers)
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
+TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
+TWITCH_LOGIN = "dmqman"  # логін Twitch каналу з посилання https://www.twitch.tv/dmqman
 
-# Перевірка YouTube
-async def check_youtube():
+def check_youtube_live():
+    """
+    Перевірка, чи веде YouTube канал прямий ефір.
+    Використовується YouTube Data API.
+    """
+    if not YOUTUBE_API_KEY:
+        logger.error("Не встановлено YOUTUBE_API_KEY")
+        return False, None
+    url = ("https://www.googleapis.com/youtube/v3/search"
+           f"?part=snippet&channelId={CHANNEL_ID}&eventType=live&type=video&key={YOUTUBE_API_KEY}")
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        url = f"https://www.youtube.com/channel/{CHANNEL_ID}/live"
-        response = requests.get(url, headers=headers, timeout=3)
-        if response.status_code == 200 and '"isLive":true' in response.text:
-            title_start = response.text.find("<title>") + 7
-            title_end = response.text.find("</title>")
-            title = response.text[title_start:title_end].replace(" - YouTube", "")
-            return f"🔴 YouTube: {title}\n{url}"
-        return None
-    except Exception as e:
-        print(f"Error checking YouTube: {str(e)}")
-        return None
-
-# Перевірка TikTok
-async def check_tiktok():
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}/live"
-        response = requests.get(url, headers=headers, timeout=3)
-        if response.status_code == 200 and '"isLive":true' in response.text:
-            return f"🎥 TikTok: {url}"
-        return None
-    except Exception as e:
-        print(f"Error checking TikTok: {str(e)}")
-        return None
-
-# Команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_message = (
-        "🎥 Привіт! Я бот для перевірки стрімів на YouTube та TikTok! 🚀\n"
-        "Використовуй команду /check, щоб перевірити активні стріми."
-    )
-    await update.message.reply_text(welcome_message)
-
-# Команда /check для перевірки стрімів
-async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Перевіряю стріми, зачекай...")
-
-    # Перевірка стрімів
-    live_streams = []
-    youtube_stream = await check_youtube()
-    if youtube_stream:
-        live_streams.append(youtube_stream)
-
-    tiktok_stream = await check_tiktok()
-    if tiktok_stream:
-        live_streams.append(tiktok_stream)
-
-    # Надсилаємо результат
-    if live_streams:
-        # Надсилаємо в Telegram-канал
-        stream_message = "🎉 Знайдено активні стріми:\n" + "\n".join(live_streams)
-        await telegram_app.bot.send_message(chat_id=TELEGRAM_CHANNEL, text=stream_message)
-        await update.message.reply_text("Стріми знайдено! Я надіслав посилання в канал: @testbotika12")
-    else:
-        # Надсилаємо в приватний чат
-        await update.message.reply_text("Наразі немає активних стрімів.")
-
-# Додаємо обробники
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("check", check))
-
-# Webhook ендпоінт (асинхронний)
-@app.route('/webhook', methods=['POST'])
-async def webhook():
-    try:
-        body = request.get_json()
-        print(f"Received webhook request: {body}")
-        if not body:
-            return {"status": "No JSON data"}, 200
-
-        update = Update.de_json(body, telegram_app.bot)
-        if update:
-            await telegram_app.process_update(update)
-            print("Update processed successfully")
+        resp = requests.get(url)
+        data = resp.json()
+        if data.get("items"):
+            video_id = data["items"][0]["id"]["videoId"]
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            logger.info("YouTube live знайдено: %s", video_url)
+            return True, video_url
         else:
-            print("Invalid update data")
-
-        return {"status": "OK"}, 200
+            logger.info("YouTube live не знайдено.")
+            return False, None
     except Exception as e:
-        print(f"Error processing webhook: {str(e)}")
-        return {"error": str(e)}, 200
+        logger.error("Помилка при перевірці YouTube: %s", e)
+        return False, None
 
-# Health check для UptimeRobot
-@app.route('/health', methods=['GET'])
-def health():
-    return {"status": "OK"}, 200
+def check_tiktok_live():
+    """
+    Перевірка, чи веде TikTok користувач стрім.
+    Це демонстраційна реалізація. Для надійної перевірки потрібен більш стабільний метод або API.
+    """
+    try:
+        url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            # Проста перевірка: шукаємо слово "live" у вмісті сторінки
+            if "live" in resp.text.lower():
+                live_url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
+                logger.info("TikTok live знайдено: %s", live_url)
+                return True, live_url
+            else:
+                logger.info("TikTok live не знайдено.")
+                return False, None
+        else:
+            logger.error("TikTok повернув статус: %s", resp.status_code)
+            return False, None
+    except Exception as e:
+        logger.error("Помилка при перевірці TikTok: %s", e)
+        return False, None
 
-# Додатковий ендпоінт для UptimeRobot (для кореня)
-@app.route('/', methods=['GET', 'HEAD'])
-def root():
-    return {"status": "OK"}, 200
+def check_twitch_live():
+    """
+    Перевірка, чи веде Twitch канал прямий ефір.
+    Використовує Twitch API для отримання даних про користувача та стрім.
+    """
+    if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
+        logger.error("Не встановлено TWITCH_CLIENT_ID або TWITCH_CLIENT_SECRET")
+        return False, None
+    try:
+        # Отримати access token
+        token_url = "https://id.twitch.tv/oauth2/token"
+        params = {
+            "client_id": TWITCH_CLIENT_ID,
+            "client_secret": TWITCH_CLIENT_SECRET,
+            "grant_type": "client_credentials"
+        }
+        token_resp = requests.post(token_url, params=params, timeout=5)
+        token_data = token_resp.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            logger.error("Не вдалося отримати Twitch access token.")
+            return False, None
 
-# Запускаємо Flask
-if __name__ == "__main__":
-    print("Starting Flask server...")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+        headers = {
+            "Client-ID": TWITCH_CLIENT_ID,
+            "Authorization": f"Bearer {access_token}"
+        }
+
+        # Отримати дані користувача за логіном
+        user_resp = requests.get("https://api.twitch.tv/helix/users", headers=headers, params={"login": TWITCH_LOGIN}, timeout=5)
+        user_data = user_resp.json()
+        if "data" not in user_data or not user_data["data"]:
+            logger.error("Користувача Twitch не знайдено.")
+            return False, None
+        user_id = user_data["data"][0]["id"]
+
+        # Перевірити статус стріму
+        stream_resp = requests.get("https://api.twitch.tv/helix/streams", headers=headers, params={"user_id": user_id}, timeout=5)
+        stream_data = stream_resp.json()
+        if stream_data.get("data"):
+            live_url = f"https://www.twitch.tv/{TWITCH_LOGIN}"
+            logger.info("Twitch live знайдено: %s", live_url)
+            return True, live_url
+        else:
+            logger.info("Twitch live не знайдено.")
+            return False, None
+    except Exception as e:
+        logger.error("Помилка при перевірці Twitch: %s", e)
+        return False, None
+
+def check_streams() -> dict:
+    """
+    Функція перевіряє стріми на всіх платформах та повертає словник з результатами.
+    """
+    results = {}
+    youtube_live, youtube_link = check_youtube_live()
+    results["YouTube"] = {"live": youtube_live, "link": youtube_link}
+
+    tiktok_live, tiktok_link = check_tiktok_live()
+    results["TikTok"] = {"live": tiktok_live, "link": tiktok_link}
+
+    twitch_live, twitch_link = check_twitch_live()
+    results["Twitch"] = {"live": twitch_live, "link": twitch_link}
+
+    return results
+
+def checkstreams_command(update: Update, context: CallbackContext):
+    """
+    Обробник команди /checkstreams.
+    Якщо серед платформ є активний стрім – відсилаємо повідомлення у вказаний Telegram канал,
+    інакше – повідомляємо користувачу (приватно).
+    """
+    streams = check_streams()
+    message_live = "Зараз йдуть стріми:\n"
+    any_live = False
+    for platform, details in streams.items():
+        if details["live"]:
+            any_live = True
+            message_live += f"{platform}: {details['link']}\n"
+
+    if any_live:
+        # Надіслати повідомлення у публічний канал, де бот є модератором
+        context.bot.send_message(chat_id=TELEGRAM_CHANNEL, text=message_live)
+        update.message.reply_text("Стріми відправлено до публічного каналу.")
+    else:
+        # Надіслати повідомлення лише користувачу, який викликав команду
+        update.message.reply_text("Наразі стрімів немає.")
+
+def main():
+    """
+    Основна функція – ініціалізація бота та запуск опитувальника (polling).
+    """
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
+
+    dispatcher.add_handler(CommandHandler("checkstreams", checkstreams_command))
+
+    updater.start_polling()
+    logger.info("Бот запущено.")
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
