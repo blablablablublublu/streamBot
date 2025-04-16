@@ -1,158 +1,126 @@
+import os
 import requests
-import time
-import asyncio
 import json
-import logging
-from telegram.ext import Application
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from flask import Flask, request
 
-# Налаштування логування
-logging.basicConfig(
-    filename='bot.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# Налаштування Flask для Webhook
+app = Flask(__name__)
 
-# 🔑 Дані
-API_KEY = 'AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM'
-CHANNEL_ID = 'UCcBeq64BydUvdA-kZsITNlg'
-BOT_TOKEN = '8041256909:AAGjruzEE61q_H4R5zAwpTf53Peit37lqEg'
-CHAT_ID = '@testbotika12'
+# Налаштування Telegram
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8041256909:AAGjruzEE61q_H4R5zAwpTf53Peit37lqEg")
+CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"  # YouTube Channel ID
+TIKTOK_USERNAME = "top_gamer_qq"
+TELEGRAM_CHANNEL = "@testbotika12"  # ID твого Telegram-каналу
 
-app = Application.builder().token(BOT_TOKEN).build()
+# Ініціалізація Telegram Application
+telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-TIKTOK_USERNAME = 'top_gamer_qq'
-TWITCH_CLIENT_ID = "твій_client_id"
-TWITCH_ACCESS_TOKEN = "твій_access_token"
-TWITCH_STREAMERS = ["top_gamer_qq", "dmqman"]
+# Ініціалізуємо Application
+telegram_app.initialize()
 
-def save_status():
-    status = {
-        "was_live_youtube": was_live_youtube,
-        "was_live_tiktok": was_live_tiktok,
-        "was_live_twitch": was_live_twitch
-    }
-    with open("status.json", "w") as f:
-        json.dump(status, f)
-
-def load_status():
-    try:
-        with open("status.json", "r") as f:
-            status = json.load(f)
-        return status.get("was_live_youtube", False), status.get("was_live_tiktok", False), status.get("was_live_twitch", {streamer: False for streamer in TWITCH_STREAMERS})
-    except FileNotFoundError:
-        return False, False, {streamer: False for streamer in TWITCH_STREAMERS}
-
-was_live_youtube, was_live_tiktok, was_live_twitch = load_status()
-
+# Перевірка YouTube
 async def check_youtube():
-    global was_live_youtube
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
-        url = f'https://www.youtube.com/channel/{CHANNEL_ID}/live'
-        response = requests.get(url, headers=headers, timeout=10)
-        
+        url = f"https://www.youtube.com/channel/{CHANNEL_ID}/live"
+        response = requests.get(url, headers=headers, timeout=3)
         if response.status_code == 200 and '"isLive":true' in response.text:
-            # Витягуємо заголовок (title) із HTML
-            title_start = response.text.find('<title>') + 7
-            title_end = response.text.find('</title>')
-            title = response.text[title_start:title_end].replace(' - YouTube', '')
-            logging.info(f"YouTube: Стрім активний - {title}")
-            return f'https://www.youtube.com/channel/{CHANNEL_ID}/live', title
-        else:
-            logging.info("YouTube: Стріму немає")
-            return None, None
+            title_start = response.text.find("<title>") + 7
+            title_end = response.text.find("</title>")
+            title = response.text[title_start:title_end].replace(" - YouTube", "")
+            return f"🔴 YouTube: {title}\n{url}"
+        return None
     except Exception as e:
-        logging.error(f"YouTube помилка (web scraping): {e}")
-        return None, None
-
-async def check_tiktok():
-    global was_live_tiktok
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        url = f'https://www.tiktok.com/@{TIKTOK_USERNAME}/live'
-        response = requests.get(url, headers=headers)
-
-        if response.status_code == 200 and '"isLive":true' in response.text:
-            logging.info(f"TikTok: Стрім активний - {url}")
-            return f'https://www.tiktok.com/@{TIKTOK_USERNAME}/live'
-        else:
-            logging.info("TikTok: Стріму немає")
-            return None
-    except Exception as e:
-        logging.error(f"TikTok помилка: {e}")
+        print(f"Error checking YouTube: {str(e)}")
         return None
 
-async def check_twitch(streamer):
-    global was_live_twitch
+# Перевірка TikTok
+async def check_tiktok():
     try:
-        url = f"https://api.twitch.tv/helix/streams?user_login={streamer}"
         headers = {
-            "Authorization": f"Bearer {TWITCH_ACCESS_TOKEN}",
-            "Client-Id": TWITCH_CLIENT_ID
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
-        response = requests.get(url, headers=headers)
-        data = response.json()
-
-        if data.get("data"):
-            stream = data["data"][0]
-            title = stream["title"]
-            stream_url = f"https://www.twitch.tv/{streamer}"
-            logging.info(f"Twitch: Стрім активний для {streamer} - {title}")
-            return stream_url, title
-        else:
-            logging.info(f"Twitch: Стріму немає для {streamer}")
+        url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}/live"
+        response = requests.get(url, headers=headers, timeout=3)
+        if response.status_code == 200 and '"isLive":true' in response.text:
+            return f"🎥 TikTok: {url}"
+        return None
     except Exception as e:
-        logging.error(f"Twitch помилка для {streamer}: {e}")
-    return None, None
+        print(f"Error checking TikTok: {str(e)}")
+        return None
 
-async def send_message(text):
+# Команда /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    welcome_message = (
+        "🎥 Привіт! Я бот для перевірки стрімів на YouTube та TikTok! 🚀\n"
+        "Використовуй команду /check, щоб перевірити активні стріми."
+    )
+    await update.message.reply_text(welcome_message)
+
+# Команда /check для перевірки стрімів
+async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Перевіряю стріми, зачекай...")
+
+    # Перевірка стрімів
+    live_streams = []
+    youtube_stream = await check_youtube()
+    if youtube_stream:
+        live_streams.append(youtube_stream)
+
+    tiktok_stream = await check_tiktok()
+    if tiktok_stream:
+        live_streams.append(tiktok_stream)
+
+    # Надсилаємо результат
+    if live_streams:
+        # Надсилаємо в Telegram-канал
+        stream_message = "🎉 Знайдено активні стріми:\n" + "\n".join(live_streams)
+        await telegram_app.bot.send_message(chat_id=TELEGRAM_CHANNEL, text=stream_message)
+        await update.message.reply_text("Стріми знайдено! Я надіслав посилання в канал: @testbotika12")
+    else:
+        # Надсилаємо в приватний чат
+        await update.message.reply_text("Наразі немає активних стрімів.")
+
+# Додаємо обробники
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("check", check))
+
+# Webhook ендпоінт (асинхронний)
+@app.route('/webhook', methods=['POST'])
+async def webhook():
     try:
-        await app.bot.send_message(chat_id=CHAT_ID, text=text)
-        logging.info(f"Повідомлення надіслано у Telegram: {text}")
+        body = request.get_json()
+        print(f"Received webhook request: {body}")
+        if not body:
+            return {"status": "No JSON data"}, 200
+
+        update = Update.de_json(body, telegram_app.bot)
+        if update:
+            await telegram_app.process_update(update)
+            print("Update processed successfully")
+        else:
+            print("Invalid update data")
+
+        return {"status": "OK"}, 200
     except Exception as e:
-        logging.error(f"Помилка при відправці повідомлення у Telegram: {e}")
+        print(f"Error processing webhook: {str(e)}")
+        return {"error": str(e)}, 200
 
-async def main():
-    global was_live_youtube, was_live_tiktok, was_live_twitch
-    logging.info("Бот запущений, чекаємо 30 секунд перед першою перевіркою...")
-    await asyncio.sleep(30)
+# Health check для UptimeRobot
+@app.route('/health', methods=['GET'])
+def health():
+    return {"status": "OK"}, 200
 
-    while True:
-        try:
-            link, title = await check_youtube()
-            if link and not was_live_youtube:
-                await send_message(f"🔴 YouTube стрім почався!\n🎥 {title}\n👉 {link}")
-                was_live_youtube = True
-            elif link is None and was_live_youtube:
-                was_live_youtube = False
-            await asyncio.sleep(5)
+# Додатковий ендпоінт для UptimeRobot (для кореня)
+@app.route('/', methods=['GET', 'HEAD'])
+def root():
+    return {"status": "OK"}, 200
 
-            tiktok_live = await check_tiktok()
-            if tiktok_live and not was_live_tiktok:
-                await send_message(f"🎥 TikTok стрім почався!\n👉 {tiktok_live}")
-                was_live_tiktok = True
-            elif tiktok_live is None and was_live_tiktok:
-                was_live_tiktok = False
-            await asyncio.sleep(5)
-
-            for streamer in TWITCH_STREAMERS:
-                twitch_link, twitch_title = await check_twitch(streamer)
-                if twitch_link and not was_live_twitch[streamer]:
-                    await send_message(f"🔴 Twitch стрім почався!\n🎥 {twitch_title}\n👉 {twitch_link}")
-                    was_live_twitch[streamer] = True
-                elif twitch_link is None and was_live_twitch[streamer]:
-                    was_live_twitch[streamer] = False
-                await asyncio.sleep(2)
-
-        except Exception as e:
-            logging.error(f"Помилка у циклі main: {e}")
-
-        save_status()
-        await asyncio.sleep(50)
-
+# Запускаємо Flask
 if __name__ == "__main__":
-    asyncio.run(main())
+    print("Starting Flask server...")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))

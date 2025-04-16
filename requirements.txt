@@ -1,6 +1,4 @@
-requests
-python-telegram-bot==20.8
-flask
-gunicorn
-
-telegram
+Flask==2.0.1
+python-telegram-bot==20.8 
+requests==2.31.0
+asgiref==3.7.2
