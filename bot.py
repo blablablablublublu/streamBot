@@ -7,15 +7,20 @@ import time
 from datetime import datetime
 import telebot
 from flask import Flask, request, abort
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8041256909:AAGP38US7WMqPKP1FXCM59M_Abx0Q6nBtBk")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM")
+BOT_TOKEN = "8041256909:AAGP38US7WMqPKP1FXCM59M_Abx0Q6nBtBk"
+YOUTUBE_API_KEY = "AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM"
 CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"
 TIKTOK_USERNAME = "top_gamer_qq"
-TELEGRAM_CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@testbotika12")
+TELEGRAM_CHANNEL = "@testbotika12"
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 TWITCH_LOGIN = "dmqman"
@@ -23,9 +28,6 @@ TWITCH_LOGIN = "dmqman"
 WEBHOOK_URL_BASE = os.getenv("WEBHOOK_URL", "https://streambot-yzkw.onrender.com")
 WEBHOOK_ROUTE = "/webhook"
 full_webhook_url = f"{WEBHOOK_URL_BASE}{WEBHOOK_ROUTE}?token={BOT_TOKEN}"
-if not WEBHOOK_URL_BASE:
-    logger.error("WEBHOOK_URL не задано.")
-    exit(1)
 
 app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -46,27 +48,44 @@ def check_youtube_live():
             if data.get("items"):
                 video_id = data["items"][0]["id"]["videoId"]
                 return True, f"https://www.youtube.com/watch?v={video_id}"
-        else:
-            url = f"https://www.youtube.com/channel/{CHANNEL_ID}/live"
-            resp = requests.get(url, timeout=5)
-            if "isLiveBroadcast" in resp.text:
-                return True, url
-        return False, None
+        return check_youtube_live_html()
     except Exception as e:
         logger.error("Помилка перевірки YouTube: %s", e)
         return False, None
 
-def check_tiktok_live():
+def check_youtube_live_html():
     try:
-        url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
+        url = f"https://www.youtube.com/channel/{CHANNEL_ID}/live"
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=5)
-        match = re.search(r'"liveStatus"\s*:\s*(true|false)', resp.text, re.IGNORECASE)
-        if match and match.group(1).lower() == "true":
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        live_indicator = soup.find("meta", {"name": "description"})
+        if live_indicator and "live" in live_indicator["content"].lower():
             return True, url
         return False, None
     except Exception as e:
-        logger.error("Помилка перевірки TikTok: %s", e)
+        logger.error("Помилка перевірки YouTube через HTML: %s", e)
+        return False, None
+
+def check_tiktok_live():
+    try:
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")  # Без графічного інтерфейсу
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+        url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
+        driver.get(url)
+        html_content = driver.page_source
+        soup = BeautifulSoup(html_content, 'html.parser')
+        live_indicator = soup.find("div", {"class": "live-indicator"})
+        driver.quit()
+        if live_indicator:
+            return True, url
+        return False, None
+    except Exception as e:
+        logger.error("Помилка перевірки TikTok через Selenium: %s", e)
         return False, None
 
 def check_twitch_live():

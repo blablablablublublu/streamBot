@@ -1,3 +1,6 @@
-pyTelegramBotAPI==4.11.1
+pyTelegramBotAPI
 Flask==2.2.5
 requests==2.28.1
+selenium==4.8.3
+beautifulsoup4==4.11.1
+webdriver-manager==3.8.6
