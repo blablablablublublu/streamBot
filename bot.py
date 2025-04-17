@@ -40,31 +40,25 @@ app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 active_streams = {"YouTube": False, "TikTok": False, "Twitch": False}
 
-# Створюємо глобальний event loop і запускаємо його в окремому потоці
+# Створюємо глобальний event loop та встановлюємо його як default
 ASYNC_LOOP = asyncio.new_event_loop()
+asyncio.set_event_loop(ASYNC_LOOP)
 threading.Thread(target=ASYNC_LOOP.run_forever, daemon=True).start()
 
 def safe_async_send(coro):
     """
-    Допоміжна функція, яка виконує coroutine у глобальному event loop.
-    Якщо loop закритий, створюється новий.
+    Допоміжна функція для запуску coroutine через глобальний event loop.
     """
     try:
         return asyncio.run_coroutine_threadsafe(coro, ASYNC_LOOP).result(timeout=10)
-    except RuntimeError as e:
-        if "Event loop is closed" in str(e):
-            global ASYNC_LOOP
-            ASYNC_LOOP = asyncio.new_event_loop()
-            threading.Thread(target=ASYNC_LOOP.run_forever, daemon=True).start()
-            return asyncio.run_coroutine_threadsafe(coro, ASYNC_LOOP).result(timeout=10)
-        else:
-            raise
+    except Exception as e:
+        logger.error("safe_async_send: %s", e)
 
 def in_grey_zone() -> bool:
     now = datetime.now()
     return 2 <= now.hour < 12
 
-# Асинхронні функції перевірки стрімів
+# ---------------- Асинхронні функції перевірки стрімів ----------------
 
 async def check_youtube_live():
     try:
@@ -100,12 +94,10 @@ async def check_youtube_live_html():
 async def check_tiktok_live():
     try:
         options = webdriver.ChromeOptions()
-        options.add_argument("--headless")  # без графічного інтерфейсу
+        options.add_argument("--headless")       # без графічного інтерфейсу
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
-        driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()), options=options
-        )
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
         url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
         driver.get(url)
         html_content = driver.page_source
@@ -174,7 +166,7 @@ async def check_streams_and_notify_async():
 def start_background_task():
     safe_async_send(check_streams_and_notify_async())
 
-# Telegram bot handlers
+# ---------------- Telegram bot handlers ----------------
 
 @bot.message_handler(commands=['start'])
 def handle_start(message):
@@ -209,7 +201,7 @@ def handle_callback(call):
         await call.answer()
     safe_async_send(process_callback())
 
-# Flask webhook маршрут
+# ---------------- Flask webhook маршрут ----------------
 
 @app.route(WEBHOOK_ROUTE, methods=["POST"])
 def webhook():
@@ -230,7 +222,7 @@ def webhook():
 def index():
     return "Бот працює через webhook!"
 
-# Запуск додатку
+# ---------------- Запуск додатку ----------------
 
 if __name__ == "__main__":
     bot.remove_webhook()
@@ -241,6 +233,7 @@ if __name__ == "__main__":
     start_background_task()
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
