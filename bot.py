@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Конфігурація (прописано в коді)
+# Конфігурація
 BOT_TOKEN = "8041256909:AAGP38US7WMqPKP1FXCM59M_Abx0Q6nBtBk"
 YOUTUBE_API_KEY = "AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM"
 CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"
@@ -43,17 +43,23 @@ active_streams = {"YouTube": False, "TikTok": False, "Twitch": False}
 twitch_token = None
 token_expiry = None
 
-# Створюємо глобальний event loop
+# Глобальний event loop
 ASYNC_LOOP = asyncio.new_event_loop()
 asyncio.set_event_loop(ASYNC_LOOP)
 threading.Thread(target=ASYNC_LOOP.run_forever, daemon=True).start()
 
-def safe_async_send(coro, timeout=10):
-    """Запуск coroutine через глобальний event loop з тайм-аутом."""
+def safe_async_send(coro, timeout=5):
+    """Запуск coroutine через глобальний event loop із відновленням."""
+    global ASYNC_LOOP
     try:
+        if ASYNC_LOOP.is_closed():
+            logger.warning("Event loop закритий, створюємо новий")
+            ASYNC_LOOP = asyncio.new_event_loop()
+            threading.Thread(target=ASYNC_LOOP.run_forever, daemon=True).start()
         return asyncio.run_coroutine_threadsafe(coro, ASYNC_LOOP).result(timeout=timeout)
     except Exception as e:
         logger.error("safe_async_send: %s", e)
+        return None
 
 def in_grey_zone(tz="Europe/Kiev") -> bool:
     """Перевірка, чи зараз сіра зона (2:00–12:00)."""
@@ -186,7 +192,6 @@ async def check_streams_and_notify_async():
                     logger.error("Помилка надсилання для %s: %s", platform, err)
             elif not is_live and active_streams[platform]:
                 active_streams[platform] = False
-                # Сповіщення про завершення стріму видалено
         await asyncio.sleep(300)
 
 async def verify_webhook():
@@ -215,16 +220,17 @@ def handle_start(message):
 @bot.message_handler(commands=['checkstreams'])
 def handle_check_streams(message):
     async def process():
+        logger.info("Початок обробки /checkstreams")
         results = []
         for platform, check_func in [
             ("YouTube", check_youtube_live),
             ("TikTok", check_tiktok_live),
             ("Twitch", check_twitch_live)
         ]:
+            logger.info(f"Перевірка {platform}")
             is_live, link = await check_func()
             if is_live:
                 results.append(f"{platform}: {link}")
-                # Надсилаємо в канал, якщо стрім активний
                 message_text = f"🔴 {platform} стрім активний: {link}"
                 try:
                     await bot.send_message(TELEGRAM_CHANNEL, message_text)
@@ -233,6 +239,7 @@ def handle_check_streams(message):
                     logger.error("Помилка надсилання в канал для %s: %s", platform, err)
         response = "🔴 Активні стріми:\n" + "\n".join(results) if results else "Зараз стрімів немає."
         await bot.reply_to(message, response)
+        logger.info("Завершення обробки /checkstreams")
     safe_async_send(process())
 
 @bot.message_handler(content_types=['text'])
