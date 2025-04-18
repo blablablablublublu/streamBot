@@ -56,12 +56,22 @@ async def check_tiktok_live():
         url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}/live"
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = await asyncio.to_thread(make_request, url, headers=headers)
+
+        logger.debug("HTML TikTok preview: %s", resp.text[:1000])
+
+        if resp.status_code != 200:
+            logger.error("TikTok вернув статус %s", resp.status_code)
+            return False, None
+
         soup = BeautifulSoup(resp.text, "html.parser")
 
         for script in soup.find_all("script", type="application/ld+json"):
             try:
+                if not script.string:
+                    continue
                 data = json.loads(script.string)
-                if data.get("@type") == "VideoObject" and data.get("publication", {}).get("isLiveBroadcast"):
+                publication = data.get("publication")
+                if data.get("@type") == "VideoObject" and isinstance(publication, dict) and publication.get("isLiveBroadcast"):
                     logger.info("✅ TikTok live знайдено через JSON!")
                     return True, url
             except Exception as json_err:
