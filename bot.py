@@ -3,7 +3,6 @@ import requests
 import logging
 import asyncio
 import threading
-import random
 from datetime import datetime, timedelta
 import telebot
 from flask import Flask, request, abort
@@ -15,34 +14,27 @@ from webdriver_manager.chrome import ChromeDriverManager
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 import pytz
 
-# Налаштування логування
+# ---------------- Налаштування логування ----------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Конфігурація
+# ---------------- Конфігурація (прописана в коді) ----------------
 BOT_TOKEN = "8041256909:AAGP38US7WMqPKP1FXCM59M_Abx0Q6nBtBk"
 YOUTUBE_API_KEY = "AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM"
-CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"
-TIKTOK_USERNAME = "patron_wot"
+CHANNEL_ID = "UCV1X9pvOdGnY5ZvmhifMKcw"  # оновлено на актуальний ID
+TIKTOK_USERNAME = "skarbnychka._uzin"    # приклад каналу, де зараз іде live
 TELEGRAM_CHANNEL = "@testbotika12"
-TWITCH_CLIENT_ID = "your_twitch_client_id"  # Заміни на реальний
-TWITCH_CLIENT_SECRET = "your_twitch_client_secret"  # Заміни на реальний
+TWITCH_CLIENT_ID = "your_twitch_client_id"         # замініть на реальний
+TWITCH_CLIENT_SECRET = "your_twitch_client_secret"   # замініть на реальний
 TWITCH_LOGIN = "dmqman"
 WEBHOOK_URL_BASE = "https://streambot-yzkw.onrender.com"
 WEBHOOK_ROUTE = "/webhook"
 full_webhook_url = f"{WEBHOOK_URL_BASE}{WEBHOOK_ROUTE}?token={BOT_TOKEN}"
 
-# Список User-Agent для ротації
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
-]
-
-# Ініціалізація Flask і Telegram
+# ---------------- Ініціалізація Flask і Telegram ----------------
 app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 active_streams = {"YouTube": False, "TikTok": False, "Twitch": False}
@@ -51,42 +43,44 @@ active_streams = {"YouTube": False, "TikTok": False, "Twitch": False}
 twitch_token = None
 token_expiry = None
 
-# Глобальний event loop
+# ---------------- Глобальний event loop ----------------
 ASYNC_LOOP = asyncio.new_event_loop()
 asyncio.set_event_loop(ASYNC_LOOP)
 threading.Thread(target=ASYNC_LOOP.run_forever, daemon=True).start()
 
-def safe_async_send(coro, timeout=5):
-    """Запуск coroutine через глобальний event loop із відновленням."""
-    global ASYNC_LOOP
-    logger.info("Виклик safe_async_send")
+def safe_async_send(coro, timeout=10):
+    """
+    Виконує coroutine через глобальний event loop.
+    Якщо loop закритий, створює новий.
+    """
     try:
-        if ASYNC_LOOP.is_closed():
-            logger.warning("Event loop закритий, створюємо новий")
+        return asyncio.run_coroutine_threadsafe(coro, ASYNC_LOOP).result(timeout=timeout)
+    except RuntimeError as e:
+        if "Event loop is closed" in str(e):
+            global ASYNC_LOOP
             ASYNC_LOOP = asyncio.new_event_loop()
+            asyncio.set_event_loop(ASYNC_LOOP)
             threading.Thread(target=ASYNC_LOOP.run_forever, daemon=True).start()
-        result = asyncio.run_coroutine_threadsafe(coro, ASYNC_LOOP).result(timeout=timeout)
-        logger.info("safe_async_send виконано успішно")
-        return result
-    except Exception as e:
-        logger.error("safe_async_send: %s", e)
-        return None
+            return asyncio.run_coroutine_threadsafe(coro, ASYNC_LOOP).result(timeout=timeout)
+        else:
+            logger.error("safe_async_send виключення: %s", e)
+            raise
 
 def in_grey_zone(tz="Europe/Kiev") -> bool:
-    """Перевірка, чи зараз сіра зона (2:00–12:00)."""
+    """Перевірка, чи зараз сіра зона (2:00–12:00) за обраною часовою зоною."""
     now = datetime.now(pytz.timezone(tz))
     return 2 <= now.hour < 12
 
-# ---------------- Асинхронні функції перевірки стрімів ----------------
-
+# ---------------- Функція з повторними спробами для мережевих запитів ----------------
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_fixed(2),
-    retry=retry_if_exception_type((requests.RequestException,)),
+    retry=retry_if_exception_type((requests.RequestException,))
 )
 def make_request(url, headers=None, params=None):
-    """Мережевий запит із повторними спробами."""
     return requests.get(url, headers=headers, params=params, timeout=5)
+
+# ---------------- Асинхронні функції перевірки стрімів ----------------
 
 async def check_youtube_live():
     """Перевірка стріму на YouTube через API або HTML."""
@@ -101,6 +95,7 @@ async def check_youtube_live():
             if data.get("items"):
                 video_id = data["items"][0]["id"]["videoId"]
                 return True, f"https://www.youtube.com/watch?v={video_id}"
+        # Якщо API не повертає дані, спробуємо HTML-метод
         return await check_youtube_live_html()
     except Exception as e:
         logger.error("Помилка перевірки YouTube: %s", e)
@@ -110,9 +105,10 @@ async def check_youtube_live_html():
     """Запасна перевірка YouTube через HTML."""
     try:
         url = f"https://www.youtube.com/channel/{CHANNEL_ID}/live"
-        headers = {"User-Agent": random.choice(USER_AGENTS)}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124"}
         resp = await asyncio.to_thread(make_request, url, headers=headers)
         soup = BeautifulSoup(resp.text, 'html.parser')
+        # Перевірка за метатегом і наявністю елемента, який може містити текст "LIVE"
         live_indicator = soup.find("meta", {"name": "description"})
         live_badge = soup.find("span", string=re.compile("LIVE", re.I))
         is_live = live_indicator and "live" in live_indicator["content"].lower() and live_badge
@@ -122,42 +118,35 @@ async def check_youtube_live_html():
         return False, None
 
 async def check_tiktok_live():
-    """Перевірка стріму на TikTok через Selenium."""
+    """Перевірка стріму на TikTok через Selenium із використанням явного очікування."""
     try:
         options = webdriver.ChromeOptions()
         options.add_argument("--headless")
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
-        options.add_argument(f"user-agent={random.choice(USER_AGENTS)}")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124")
         with webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options) as driver:
-            url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
-            logger.info(f"Завантаження сторінки TikTok: {url}")
+            url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}/live"
             driver.get(url)
-            # Затримка для повного завантаження сторінки
-            await asyncio.sleep(5)
-            # Спроба знайти live-індикатор за кількома селекторами
-            live_indicators = [
-                ("div.live-indicator", "Клас live-indicator"),
-                ("div.tiktok-live-container", "Контейнер live"),
-                ("span.live-status", "Статус live"),
-            ]
-            is_live = False
-            live_url = None
-            for selector, desc in live_indicators:
-                elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                logger.info(f"Перевірка селектора '{selector}' ({desc}): {len(elements)} елементів")
-                if elements:
-                    is_live = True
-                    live_url = url
-                    break
-            if not is_live:
-                logger.info("Live-індикатор не знайдено, перевірка тексту сторінки")
-                page_source = driver.page_source
-                is_live = "LIVE" in page_source or "is live now" in page_source.lower()
-                live_url = url if is_live else None
-            return is_live, live_url
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            # XPath-шукаємо елемент із текстом "live" або "прямий ефір" незалежно від регістру
+            xpath_expr = (
+                "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'live') or "
+                "contains(translate(text(), 'АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЮЯ', 'абвгґдеєжзиіїклмнопрстуфхцчшщюя'), 'прямий ефір')]"
+            )
+            try:
+                wait = WebDriverWait(driver, 10)
+                element = wait.until(EC.presence_of_element_located((By.XPATH, xpath_expr)))
+                is_live = True if element else False
+            except Exception as ex:
+                logger.error("Не знайдено елемент із текстом live: %s", ex)
+                is_live = False
+            html_content = driver.page_source
+            logger.info("TikTok HTML (перші 1000 символів): %s", html_content[:1000])
+            return is_live, url if is_live else None
     except Exception as e:
-        logger.error("Помилка перевірки TikTok: %s", e)
+        logger.error("Помилка перевірки TikTok через Selenium: %s", e)
         return False, None
 
 async def get_twitch_token():
@@ -228,7 +217,7 @@ async def check_streams_and_notify_async():
         await asyncio.sleep(300)
 
 async def verify_webhook():
-    """Періодична перевірка стану вебхука."""
+    """Перевірка стану вебхука кожну годину та його відновлення за потреби."""
     while True:
         try:
             webhook_info = bot.get_webhook_info()
@@ -237,10 +226,10 @@ async def verify_webhook():
                 logger.info("Webhook відновлено: %s", full_webhook_url)
         except Exception as e:
             logger.error("Помилка перевірки вебхука: %s", e)
-        await asyncio.sleep(3600)  # Перевіряти кожну годину
+        await asyncio.sleep(3600)
 
 def start_background_tasks():
-    """Запуск фонових задач."""
+    """Запуск фонових задач перевірки стрімів та контролю вебхука."""
     safe_async_send(check_streams_and_notify_async())
     safe_async_send(verify_webhook())
 
@@ -253,26 +242,23 @@ def handle_start(message):
 @bot.message_handler(commands=['checkstreams'])
 def handle_check_streams(message):
     async def process():
-        logger.info("Початок обробки /checkstreams")
         results = []
         for platform, check_func in [
             ("YouTube", check_youtube_live),
             ("TikTok", check_tiktok_live),
             ("Twitch", check_twitch_live)
         ]:
-            logger.info(f"Перевірка {platform}")
             is_live, link = await check_func()
             if is_live:
                 results.append(f"{platform}: {link}")
-                message_text = f"🔴 {platform} стрім активний: {link}"
+                channel_message = f"🔴 {platform} стрім активний: {link}"
                 try:
-                    await bot.send_message(TELEGRAM_CHANNEL, message_text)
-                    logger.info("Сповіщення відправлено в канал для %s", platform)
+                    await bot.send_message(TELEGRAM_CHANNEL, channel_message)
+                    logger.info("Сповіщення в канал відправлено для %s", platform)
                 except Exception as err:
                     logger.error("Помилка надсилання в канал для %s: %s", platform, err)
         response = "🔴 Активні стріми:\n" + "\n".join(results) if results else "Зараз стрімів немає."
         await bot.reply_to(message, response)
-        logger.info("Завершення обробки /checkstreams")
     safe_async_send(process())
 
 @bot.message_handler(content_types=['text'])
@@ -317,6 +303,8 @@ if __name__ == "__main__":
     start_background_tasks()
     port = 5000
     app.run(host="0.0.0.0", port=port)
+
+
 
 
 
