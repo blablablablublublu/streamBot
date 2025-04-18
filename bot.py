@@ -3,6 +3,7 @@ import requests
 import logging
 import asyncio
 import threading
+import random
 from datetime import datetime, timedelta
 import telebot
 from flask import Flask, request, abort
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = "8041256909:AAGP38US7WMqPKP1FXCM59M_Abx0Q6nBtBk"
 YOUTUBE_API_KEY = "AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM"
 CHANNEL_ID = "UCcBeq64BydUvdA-kZsITNlg"
-TIKTOK_USERNAME = "patron_wot"  # Оновлено на новий акаунт
+TIKTOK_USERNAME = "patron_wot"
 TELEGRAM_CHANNEL = "@testbotika12"
 TWITCH_CLIENT_ID = "your_twitch_client_id"  # Заміни на реальний
 TWITCH_CLIENT_SECRET = "your_twitch_client_secret"  # Заміни на реальний
@@ -33,6 +34,13 @@ TWITCH_LOGIN = "dmqman"
 WEBHOOK_URL_BASE = "https://streambot-yzkw.onrender.com"
 WEBHOOK_ROUTE = "/webhook"
 full_webhook_url = f"{WEBHOOK_URL_BASE}{WEBHOOK_ROUTE}?token={BOT_TOKEN}"
+
+# Список User-Agent для ротації
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+]
 
 # Ініціалізація Flask і Telegram
 app = Flask(__name__)
@@ -51,12 +59,15 @@ threading.Thread(target=ASYNC_LOOP.run_forever, daemon=True).start()
 def safe_async_send(coro, timeout=5):
     """Запуск coroutine через глобальний event loop із відновленням."""
     global ASYNC_LOOP
+    logger.info("Виклик safe_async_send")
     try:
         if ASYNC_LOOP.is_closed():
             logger.warning("Event loop закритий, створюємо новий")
             ASYNC_LOOP = asyncio.new_event_loop()
             threading.Thread(target=ASYNC_LOOP.run_forever, daemon=True).start()
-        return asyncio.run_coroutine_threadsafe(coro, ASYNC_LOOP).result(timeout=timeout)
+        result = asyncio.run_coroutine_threadsafe(coro, ASYNC_LOOP).result(timeout=timeout)
+        logger.info("safe_async_send виконано успішно")
+        return result
     except Exception as e:
         logger.error("safe_async_send: %s", e)
         return None
@@ -99,7 +110,7 @@ async def check_youtube_live_html():
     """Запасна перевірка YouTube через HTML."""
     try:
         url = f"https://www.youtube.com/channel/{CHANNEL_ID}/live"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124"}
+        headers = {"User-Agent": random.choice(USER_AGENTS)}
         resp = await asyncio.to_thread(make_request, url, headers=headers)
         soup = BeautifulSoup(resp.text, 'html.parser')
         live_indicator = soup.find("meta", {"name": "description"})
@@ -117,12 +128,34 @@ async def check_tiktok_live():
         options.add_argument("--headless")
         options.add_argument("--disable-gpu")
         options.add_argument("--no-sandbox")
+        options.add_argument(f"user-agent={random.choice(USER_AGENTS)}")
         with webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options) as driver:
             url = f"https://www.tiktok.com/@{TIKTOK_USERNAME}"
+            logger.info(f"Завантаження сторінки TikTok: {url}")
             driver.get(url)
-            live_indicator = driver.find_elements(By.CSS_SELECTOR, "div.live-indicator")
-            is_live = bool(live_indicator)
-            return is_live, url if is_live else None
+            # Затримка для повного завантаження сторінки
+            await asyncio.sleep(5)
+            # Спроба знайти live-індикатор за кількома селекторами
+            live_indicators = [
+                ("div.live-indicator", "Клас live-indicator"),
+                ("div.tiktok-live-container", "Контейнер live"),
+                ("span.live-status", "Статус live"),
+            ]
+            is_live = False
+            live_url = None
+            for selector, desc in live_indicators:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                logger.info(f"Перевірка селектора '{selector}' ({desc}): {len(elements)} елементів")
+                if elements:
+                    is_live = True
+                    live_url = url
+                    break
+            if not is_live:
+                logger.info("Live-індикатор не знайдено, перевірка тексту сторінки")
+                page_source = driver.page_source
+                is_live = "LIVE" in page_source or "is live now" in page_source.lower()
+                live_url = url if is_live else None
+            return is_live, live_url
     except Exception as e:
         logger.error("Помилка перевірки TikTok: %s", e)
         return False, None
