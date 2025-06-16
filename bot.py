@@ -20,7 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфігурація
-BOT_TOKEN = "8041256909:AAGP38US7WMqPKP1FXCM59M_Abx0Q6nBtBk"
+BOT_TOKEN = "8041256909:AAEEM-S12khXeNtwZgeKPTo67_tK0kW28io"
 YOUTUBE_API_KEY = "AIzaSyB1GlNtoCX2d2BM67n20hFeOqJ51nMZvnM"
 CHANNEL_ID = "UCV1X9pvOdGnY5ZvmhifMKcw"
 TIKTOK_USERNAME = "patron_wot"
